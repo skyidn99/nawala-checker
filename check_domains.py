@@ -56,15 +56,15 @@ def classify_status_text(status_text: str):
     """
     Mengubah teks hasil dari Nawala menjadi emoji + label singkat.
 
-    Silakan sesuaikan kata kunci di bawah ini dengan teks asli yang muncul
-    di <div id="results"> pada halaman nawalacheck.skiddle.id.
+    Nanti kalau perlu kita sesuaikan lagi kata kunci-nya
+    berdasarkan teks asli di <div id="results">.
     """
     t = status_text.lower().strip()
 
     if not t:
         return "⚪", "TIDAK ADA DATA"
 
-    # cek yang 'tidak diblokir' / aman dulu, biar tidak ketabrak kata 'blocked'
+    # aman dulu
     if (
         "not blocked" in t
         or "tidak diblokir" in t
@@ -74,11 +74,10 @@ def classify_status_text(status_text: str):
     ):
         return "🟢", "AMAN"
 
-    # kalau ada kata 'blocked' / 'diblokir' → anggap kena blok
-    if "blocked" in t or "diblokir" in t or "in our blocklist" in t:
+    # kena blok
+    if "blocked" in t or "diblokir" in t or "blocklist" in t:
         return "🔴", "TERBLOKIR"
 
-    # fallback kalau teksnya beda
     return "⚪", "STATUS TIDAK DIKETAHUI"
 
 
@@ -86,7 +85,6 @@ def check_domain(driver, domain):
     driver.get("https://nawalacheck.skiddle.id/")
     sleep(3)  # tunggu halaman siap
 
-    # ====== selector yang sudah disesuaikan ======
     # textarea input domain: <textarea id="domains" name="domains" ...>
     input_box = driver.find_element(By.CSS_SELECTOR, "#domains")
     input_box.clear()
@@ -118,13 +116,10 @@ def main():
         emoji, label = classify_status_text(status_text)
 
         ts = datetime.now().isoformat(timespec="seconds")
-        # kirim teks lengkap + hasil asli dari Nawala (buat debug):
+        # PERHATIKAN: di sini ada emoji di depan
         line = f"{emoji} [{ts}] {d} -> {label}\n{status_text}"
 
-        # tampil di log Railway
         print(line, flush=True)
-
-        # kirim juga ke Telegram
         send_telegram(line)
 
     driver.quit()
