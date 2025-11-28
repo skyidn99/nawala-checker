@@ -14,6 +14,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 def send_telegram(text: str):
+    """Kirim pesan ke Telegram."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram env belum di-set")
         return
@@ -45,42 +46,69 @@ def load_domains():
         return [line.strip() for line in f if line.strip()]
 
 
+def classify_status_text(status_text: str):
+    """
+    Ubah teks hasil dari Nawala menjadi emoji + label singkat.
+    """
+    t = status_text.lower().strip()
+
+    if not t:
+        return "⚪", "Unknown"
+
+    # prioritas aman dulu
+    if "not blocked" in t or "tidak diblokir" in t or "clean" in t or "safe" in t:
+        return "🟢", "Not Blocked"
+
+    if "blocked" in t or "diblokir" in t or "blocklist" in t:
+        return "🔴", "Blocked"
+
+    return "⚪", "Unknown"
+
+
 def check_single_domain(driver, domain: str) -> str:
+    """
+    Buka halaman, isi domain, KLIK tombol 'Check Domains', lalu baca hasil.
+    """
     driver.get("https://nawalacheck.skiddle.id/")
     sleep(3)
 
-    # textarea id="domains"
-    input_box = driver.find_element(By.CSS_SELECTOR, "#domains")
-    input_box.clear()
-    input_box.send_keys(domain)
-    input_box.send_keys(Keys.CONTROL, Keys.ENTER)
+    # textarea domain (ID bisa beda, tapi biasanya cuma satu textarea di halaman)
+    textarea = driver.find_element(By.TAG_NAME, "textarea")
+    textarea.clear()
+    textarea.send_keys(domain)
 
-    # kasih waktu JS loading agak lama
+    # cari tombol dengan teks 'Check Domains' lalu klik
+    button = driver.find_element(
+        By.XPATH, "//button[contains(., 'Check Domains')]"
+    )
+    button.click()
+
+    # tunggu JS memproses
     sleep(8)
 
+    # baca innerText dari #results
     result_el = driver.find_element(By.CSS_SELECTOR, "#results")
-    # pakai innerText supaya semua anak <p>/<li> ikut kebaca
-    status_text = result_el.get_attribute("innerText") or ""
-    status_text = status_text.strip()
-
+    status_text = (result_el.get_attribute("innerText") or "").strip()
     return status_text
 
 
 def main():
-    print("=== DEBUG RAW MODE ===", flush=True)
+    print("=== DOMAIN CHECKER (BUTTON CLICK MODE) ===", flush=True)
 
     domains = load_domains()
     driver = setup_driver()
 
-    lines = ["Domain Status Report (RAW dari nawalacheck.skiddle.id)"]
+    lines = ["Domain Status Report"]
 
     for d in domains:
         try:
             status_text = check_single_domain(driver, d)
+            emoji, label = classify_status_text(status_text)
         except Exception as e:
             status_text = f"ERROR: {e}"
+            emoji, label = "⚪", "ERROR"
 
-        line = f"{d} -> {status_text}"
+        line = f"{d}: {emoji} {label}"
         print(line, flush=True)
         lines.append(line)
 
