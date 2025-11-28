@@ -98,7 +98,7 @@ def main():
     domains = load_domains()
     driver = setup_driver()
 
-    lines = ["Domain Status Report"]
+    lines = ["Domain Status Report (DEBUG mode)"]
 
     for d in domains:
         try:
@@ -107,7 +107,7 @@ def main():
         except Exception as e:
             emoji, label = "⚪", f"ERROR: {e}"
 
-        line = f"{d}: {emoji} {label}"
+        line = f"{d}: RAW RESULT -> {status_text}"
         print(line, flush=True)
         lines.append(line)
 
