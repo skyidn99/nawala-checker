@@ -52,6 +52,36 @@ def load_domains():
         return [line.strip() for line in f if line.strip()]
 
 
+def classify_status_text(status_text: str):
+    """
+    Mengubah teks hasil dari Nawala menjadi emoji + label singkat.
+
+    Silakan sesuaikan kata kunci di bawah ini dengan teks asli yang muncul
+    di <div id="results"> pada halaman nawalacheck.skiddle.id.
+    """
+    t = status_text.lower().strip()
+
+    if not t:
+        return "⚪", "TIDAK ADA DATA"
+
+    # cek yang 'tidak diblokir' / aman dulu, biar tidak ketabrak kata 'blocked'
+    if (
+        "not blocked" in t
+        or "tidak diblokir" in t
+        or "not in our list" in t
+        or "clean" in t
+        or "safe" in t
+    ):
+        return "🟢", "AMAN"
+
+    # kalau ada kata 'blocked' / 'diblokir' → anggap kena blok
+    if "blocked" in t or "diblokir" in t or "in our blocklist" in t:
+        return "🔴", "TERBLOKIR"
+
+    # fallback kalau teksnya beda
+    return "⚪", "STATUS TIDAK DIKETAHUI"
+
+
 def check_domain(driver, domain):
     driver.get("https://nawalacheck.skiddle.id/")
     sleep(3)  # tunggu halaman siap
@@ -70,8 +100,9 @@ def check_domain(driver, domain):
 
     # container hasil: <div id="results" class="mt-8"></div>
     result_el = driver.find_element(By.CSS_SELECTOR, "#results")
-    status = result_el.text.strip()
-    return status
+    status_text = result_el.text.strip()
+
+    return status_text
 
 
 def main():
@@ -80,12 +111,15 @@ def main():
 
     for d in domains:
         try:
-            status = check_domain(driver, d)
+            status_text = check_domain(driver, d)
         except Exception as e:
-            status = f"ERROR: {e}"
+            status_text = f"ERROR: {e}"
+
+        emoji, label = classify_status_text(status_text)
 
         ts = datetime.now().isoformat(timespec="seconds")
-        line = f"[{ts}] {d} -> {status}"
+        # kirim teks lengkap + hasil asli dari Nawala (buat debug):
+        line = f"{emoji} [{ts}] {d} -> {label}\n{status_text}"
 
         # tampil di log Railway
         print(line, flush=True)
