@@ -6,7 +6,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from time import sleep
-from datetime import datetime
 
 DOMAINS_FILE = "domains.txt"
 
@@ -25,6 +24,7 @@ def send_telegram(text: str):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
+        "disable_web_page_preview": True,
     }
 
     try:
@@ -39,7 +39,6 @@ def send_telegram(text: str):
 
 def setup_driver():
     options = Options()
-    # mode headless: browser tidak kelihatan
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -55,74 +54,70 @@ def load_domains():
 def classify_status_text(status_text: str):
     """
     Mengubah teks hasil dari Nawala menjadi emoji + label singkat.
-
-    Nanti kalau perlu kita sesuaikan lagi kata kunci-nya
-    berdasarkan teks asli di <div id="results">.
+    Sesuaikan kata-kata di sini kalau nanti teks-nya berbeda.
     """
     t = status_text.lower().strip()
 
     if not t:
-        return "⚪", "TIDAK ADA DATA"
+        return "⚪", "Unknown"
 
-    # aman dulu
-    if (
-        "not blocked" in t
-        or "tidak diblokir" in t
-        or "not in our list" in t
-        or "clean" in t
-        or "safe" in t
-    ):
-        return "🟢", "AMAN"
+    if "not blocked" in t or "tidak diblokir" in t:
+        return "🟢", "Aman"
 
-    # kena blok
     if "blocked" in t or "diblokir" in t or "blocklist" in t:
-        return "🔴", "TERBLOKIR"
+        return "🔴", "Blocked"
 
-    return "⚪", "STATUS TIDAK DIKETAHUI"
+    return "⚪", "Unknown"
 
 
-def check_domain(driver, domain):
+def check_single_domain(driver, domain: str) -> str:
+    """
+    Membuka halaman nawalacheck, cek satu domain,
+    dan mengembalikan teks penuh dari <div id="results">.
+    """
     driver.get("https://nawalacheck.skiddle.id/")
-    sleep(3)  # tunggu halaman siap
+    sleep(3)
 
-    # textarea input domain: <textarea id="domains" name="domains" ...>
+    # textarea: <textarea id="domains" name="domains" ...>
     input_box = driver.find_element(By.CSS_SELECTOR, "#domains")
     input_box.clear()
     input_box.send_keys(domain)
 
-    # submit form (CTRL+ENTER di textarea)
+    # submit form
     input_box.send_keys(Keys.CONTROL, Keys.ENTER)
 
-    # tunggu hasil keluar
     sleep(5)
 
-    # container hasil: <div id="results" class="mt-8"></div>
     result_el = driver.find_element(By.CSS_SELECTOR, "#results")
-    status_text = result_el.text.strip()
-
-    return status_text
+    return result_el.text.strip()
 
 
 def main():
+    print("=== NEW VERSION: GROUPED REPORT ===", flush=True)
+
     domains = load_domains()
     driver = setup_driver()
 
+    lines = ["Domain Status Report"]
+
     for d in domains:
         try:
-            status_text = check_domain(driver, d)
+            status_text = check_single_domain(driver, d)
+            emoji, label = classify_status_text(status_text)
         except Exception as e:
-            status_text = f"ERROR: {e}"
+            emoji, label = "⚪", f"ERROR: {e}"
 
-        emoji, label = classify_status_text(status_text)
-
-        ts = datetime.now().isoformat(timespec="seconds")
-        # PERHATIKAN: di sini ada emoji di depan
-        line = f"{emoji} [{ts}] {d} -> {label}\n{status_text}"
-
+        line = f"{d}: {emoji} {label}"
         print(line, flush=True)
-        send_telegram(line)
+        lines.append(line)
 
     driver.quit()
+
+    # Gabungkan jadi satu pesan ke Telegram
+    message = "\n".join(lines)
+    print("=== SENDING TELEGRAM MESSAGE ===")
+    print(message)
+    send_telegram(message)
 
 
 if __name__ == "__main__":
