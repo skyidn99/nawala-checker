@@ -7,10 +7,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from time import sleep
 
-DOMAINS_FILE = "domains.txt"
-
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+DOMAINS_ENV = os.environ.get("DOMAINS_TO_CHECK", "")
 
 
 def send_telegram(text: str):
@@ -42,8 +41,24 @@ def setup_driver():
 
 
 def load_domains():
-    with open(DOMAINS_FILE) as f:
-        return [line.strip() for line in f if line.strip()]
+    """
+    Ambil daftar domain dari env DOMAINS_TO_CHECK.
+    Format: dipisah dengan koma, boleh pakai enter.
+
+    Contoh di Railway Variables:
+
+    DOMAINS_TO_CHECK = pemburuscatter.com, che-la.lol, boxing55ab.store,
+                       boxing55ai.store, boxing55we.site
+    """
+    if not DOMAINS_ENV:
+        print("DOMAINS_TO_CHECK kosong, tidak ada domain untuk dicek.", flush=True)
+        return []
+
+    raw = DOMAINS_ENV.replace("\n", ",")
+    parts = [p.strip() for p in raw.split(",")]
+    domains = [p for p in parts if p]
+    print("Loaded domains from DOMAINS_TO_CHECK:", domains, flush=True)
+    return domains
 
 
 def classify_status_text(status_text: str):
@@ -55,7 +70,6 @@ def classify_status_text(status_text: str):
     if not t:
         return "⚪", "Unknown"
 
-    # prioritas aman dulu
     if "not blocked" in t or "tidak diblokir" in t or "clean" in t or "safe" in t:
         return "🟢", "Not Blocked"
 
@@ -72,30 +86,31 @@ def check_single_domain(driver, domain: str) -> str:
     driver.get("https://nawalacheck.skiddle.id/")
     sleep(3)
 
-    # textarea domain (ID bisa beda, tapi biasanya cuma satu textarea di halaman)
+    # textarea domain (biasanya cuma satu di halaman)
     textarea = driver.find_element(By.TAG_NAME, "textarea")
     textarea.clear()
     textarea.send_keys(domain)
 
-    # cari tombol dengan teks 'Check Domains' lalu klik
-    button = driver.find_element(
-        By.XPATH, "//button[contains(., 'Check Domains')]"
-    )
+    # klik tombol yang mengandung teks 'Check Domains'
+    button = driver.find_element(By.XPATH, "//button[contains(., 'Check Domains')]")
     button.click()
 
     # tunggu JS memproses
     sleep(8)
 
-    # baca innerText dari #results
     result_el = driver.find_element(By.CSS_SELECTOR, "#results")
     status_text = (result_el.get_attribute("innerText") or "").strip()
     return status_text
 
 
 def main():
-    print("=== DOMAIN CHECKER (BUTTON CLICK MODE) ===", flush=True)
+    print("=== DOMAIN CHECKER (ENV ONLY) ===", flush=True)
 
     domains = load_domains()
+    if not domains:
+        send_telegram("Domain Status Report\nTidak ada domain untuk dicek.")
+        return
+
     driver = setup_driver()
 
     lines = ["Domain Status Report"]
