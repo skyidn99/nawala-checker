@@ -4,7 +4,8 @@ import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -23,9 +24,10 @@ def send_telegram(text: str):
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "disable_web_page_preview": True,
+        "parse_mode": "HTML",
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, timeout=15)
         print("Telegram resp:", resp.status_code, resp.text[:200])
     except Exception as e:
         print("Gagal kirim ke Telegram:", e)
@@ -43,12 +45,11 @@ def setup_driver():
 def load_domains():
     """
     Ambil daftar domain dari env DOMAINS_TO_CHECK.
-    Format: dipisah dengan koma, boleh pakai enter.
+    Format: bisa dipisah koma atau enter.
 
     Contoh di Railway Variables:
 
-    DOMAINS_TO_CHECK = pemburuscatter.com, che-la.lol, boxing55ab.store,
-                       boxing55ai.store, boxing55we.site
+    DOMAINS_TO_CHECK = alien55.com, alien55.site, alien55.vip
     """
     if not DOMAINS_ENV:
         print("DOMAINS_TO_CHECK kosong, tidak ada domain untuk dicek.", flush=True)
@@ -63,43 +64,72 @@ def load_domains():
 
 def classify_status_text(status_text: str):
     """
-    Ubah teks hasil dari Nawala menjadi emoji + label singkat.
+    Ubah teks hasil dari tabel Nawala menjadi emoji + label singkat.
     """
-    t = status_text.lower().strip()
+    t = (status_text or "").strip().lower()
 
     if not t:
         return "⚪", "Unknown"
 
-    if "not blocked" in t or "tidak diblokir" in t or "clean" in t or "safe" in t:
+    # penting: cek "not blocked" dulu supaya tidak ketimpa kata "blocked"
+    if "not blocked" in t or "tidak diblokir" in t:
         return "🟢", "Not Blocked"
 
     if "blocked" in t or "diblokir" in t or "blocklist" in t:
         return "🔴", "Blocked"
 
-    return "⚪", "Unknown"
+    if "error" in t:
+        return "🟠", "Error"
+
+    return "⚪", status_text.strip() or "Unknown"
 
 
 def check_single_domain(driver, domain: str) -> str:
     """
-    Buka halaman, isi domain, KLIK tombol 'Check Domains', lalu baca hasil.
+    Buka halaman, isi SATU domain di textarea, klik 'Check Domains',
+    lalu baca teks status domain tersebut dari tabel (kolom Status).
     """
     driver.get("https://nawalacheck.skiddle.id/")
-    sleep(3)
+    sleep(2)
 
-    # textarea domain (biasanya cuma satu di halaman)
+    # textarea domain (hanya satu di halaman)
     textarea = driver.find_element(By.TAG_NAME, "textarea")
     textarea.clear()
     textarea.send_keys(domain)
 
-    # klik tombol yang mengandung teks 'Check Domains'
+    # klik tombol "Check Domains"
     button = driver.find_element(By.XPATH, "//button[contains(., 'Check Domains')]")
     button.click()
 
-    # tunggu JS memproses
-    sleep(8)
+    # tunggu sampai minimal satu baris hasil muncul di tabel
+    WebDriverWait(driver, 60).until(
+        EC.presence_of_element_located(
+            (By.CSS_SELECTOR, "#results table tbody tr")
+        )
+    )
 
-    result_el = driver.find_element(By.CSS_SELECTOR, "#results")
-    status_text = (result_el.get_attribute("innerText") or "").strip()
+    rows = driver.find_elements(By.CSS_SELECTOR, "#results table tbody tr")
+    status_text = ""
+
+    for row in rows:
+        tds = row.find_elements(By.TAG_NAME, "td")
+        if len(tds) < 2:
+            continue
+
+        domain_cell = tds[0].text.strip().lower()
+        status_cell = tds[1].text.strip()
+
+        # seharusnya hanya 1 domain di tabel, tapi kita cocokan nama domain untuk aman
+        if domain_cell == domain.lower():
+            status_text = status_cell
+            break
+
+    # fallback: kalau tidak ketemu row yang cocok, ambil status baris pertama
+    if not status_text and rows:
+        first_tds = rows[0].find_elements(By.TAG_NAME, "td")
+        if len(first_tds) >= 2:
+            status_text = first_tds[1].text.strip()
+
     return status_text
 
 
@@ -113,7 +143,7 @@ def main():
 
     driver = setup_driver()
 
-    lines = ["Domain Status Report"]
+    lines = ["<b>Domain Status Report</b>"]
 
     for d in domains:
         try:
@@ -123,9 +153,13 @@ def main():
             status_text = f"ERROR: {e}"
             emoji, label = "⚪", "ERROR"
 
-        line = f"{d}: {emoji} {label}"
-        print(line, flush=True)
-        lines.append(line)
+        line_plain = f"{d}: {emoji} {label}"
+        print(line_plain, flush=True)
+
+        # format link klik-able di Telegram
+        link = f"<a href=\"http://{d}\">{d}</a>"
+        line_for_telegram = f"{link}: {emoji} {label}"
+        lines.append(line_for_telegram)
 
     driver.quit()
 
