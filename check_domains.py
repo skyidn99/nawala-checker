@@ -8,11 +8,13 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
 
+# ====== ENV VARS ======
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 DOMAINS_ENV = os.environ.get("DOMAINS_TO_CHECK", "")
 
 
+# ====== TELEGRAM ======
 def send_telegram(text: str):
     """Kirim pesan ke Telegram."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -33,6 +35,7 @@ def send_telegram(text: str):
         print("Gagal kirim ke Telegram:", e)
 
 
+# ====== SELENIUM SETUP ======
 def setup_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -42,10 +45,11 @@ def setup_driver():
     return driver
 
 
+# ====== DOMAIN INPUT ======
 def load_domains():
     """
     Ambil daftar domain dari env DOMAINS_TO_CHECK.
-    Format: bisa dipisah koma atau enter.
+    Bisa dipisah koma atau enter.
 
     Contoh di Railway Variables:
 
@@ -55,16 +59,19 @@ def load_domains():
         print("DOMAINS_TO_CHECK kosong, tidak ada domain untuk dicek.", flush=True)
         return []
 
+    # ganti enter dengan koma supaya fleksibel
     raw = DOMAINS_ENV.replace("\n", ",")
     parts = [p.strip() for p in raw.split(",")]
     domains = [p for p in parts if p]
+
     print("Loaded domains from DOMAINS_TO_CHECK:", domains, flush=True)
     return domains
 
 
+# ====== STATUS PARSER ======
 def classify_status_text(status_text: str):
     """
-    Ubah teks hasil dari tabel Nawala menjadi emoji + label singkat.
+    Ubah teks dari kolom Status menjadi emoji + label singkat.
     """
     t = (status_text or "").strip().lower()
 
@@ -84,55 +91,51 @@ def classify_status_text(status_text: str):
     return "⚪", status_text.strip() or "Unknown"
 
 
-def check_single_domain(driver, domain: str) -> str:
+# ====== CORE CHECK: CEK BANYAK DOMAIN SEKALIGUS ======
+def check_multiple_domains(driver, domains):
     """
-    Buka halaman, isi SATU domain di textarea, klik 'Check Domains',
-    lalu baca teks status domain tersebut dari tabel (kolom Status).
+    Buka halaman, isi SEMUA domain sekaligus di textarea,
+    klik 'Check Domains', lalu baca tabel hasil (per-domain).
+    Mengembalikan dict: {domain_lower: status_text}
     """
     driver.get("https://nawalacheck.skiddle.id/")
-    sleep(2)
+    sleep(3)
 
-    # textarea domain (hanya satu di halaman)
+    # textarea domain
     textarea = driver.find_element(By.TAG_NAME, "textarea")
     textarea.clear()
-    textarea.send_keys(domain)
+    textarea.send_keys("\n".join(domains))
 
     # klik tombol "Check Domains"
     button = driver.find_element(By.XPATH, "//button[contains(., 'Check Domains')]")
     button.click()
 
-    # tunggu sampai minimal satu baris hasil muncul di tabel
+    # tunggu sampai tabel hasil muncul
     WebDriverWait(driver, 60).until(
         EC.presence_of_element_located(
             (By.CSS_SELECTOR, "#results table tbody tr")
         )
     )
 
+    # ambil seluruh baris tabel
     rows = driver.find_elements(By.CSS_SELECTOR, "#results table tbody tr")
-    status_text = ""
+    results = {}
 
     for row in rows:
-        tds = row.find_elements(By.TAG_NAME, "td")
-        if len(tds) < 2:
+        cols = row.find_elements(By.TAG_NAME, "td")
+        if len(cols) < 2:
             continue
 
-        domain_cell = tds[0].text.strip().lower()
-        status_cell = tds[1].text.strip()
+        domain_cell = cols[0].text.strip().lower()
+        status_cell = cols[1].text.strip()
 
-        # seharusnya hanya 1 domain di tabel, tapi kita cocokan nama domain untuk aman
-        if domain_cell == domain.lower():
-            status_text = status_cell
-            break
+        results[domain_cell] = status_cell
 
-    # fallback: kalau tidak ketemu row yang cocok, ambil status baris pertama
-    if not status_text and rows:
-        first_tds = rows[0].find_elements(By.TAG_NAME, "td")
-        if len(first_tds) >= 2:
-            status_text = first_tds[1].text.strip()
-
-    return status_text
+    print("Parsed results from table:", results, flush=True)
+    return results
 
 
+# ====== MAIN ======
 def main():
     print("=== DOMAIN CHECKER (ENV ONLY) ===", flush=True)
 
@@ -141,29 +144,44 @@ def main():
         send_telegram("Domain Status Report\nTidak ada domain untuk dicek.")
         return
 
+    # kalau mau, bisa batasi maksimal 100 domain (sesuai limit website)
+    if len(domains) > 100:
+        print("Warning: domain > 100, hanya 100 pertama yang dicek.", flush=True)
+        domains = domains[:100]
+
     driver = setup_driver()
 
-    lines = ["<b>Domain Status Report</b>"]
+    try:
+        results = check_multiple_domains(driver, domains)
+    except Exception as e:
+        driver.quit()
+        err_msg = f"Gagal mengambil hasil dari NawalaCheck: {e}"
+        print(err_msg, flush=True)
+        send_telegram(err_msg)
+        return
+
+    lines_console = ["Domain Status Report"]
+    lines_tg = ["<b>Domain Status Report</b>"]
 
     for d in domains:
-        try:
-            status_text = check_single_domain(driver, d)
-            emoji, label = classify_status_text(status_text)
-        except Exception as e:
-            status_text = f"ERROR: {e}"
-            emoji, label = "⚪", "ERROR"
+        key = d.lower()
+        status_text = results.get(key, "Unknown")
+        emoji, label = classify_status_text(status_text)
 
-        line_plain = f"{d}: {emoji} {label}"
+        # log ke console
+        line_plain = f"{d}: {emoji} {label} ({status_text})"
         print(line_plain, flush=True)
+        lines_console.append(line_plain)
 
-        # format link klik-able di Telegram
+        # format link klikable di Telegram
         link = f"<a href=\"http://{d}\">{d}</a>"
-        line_for_telegram = f"{link}: {emoji} {label}"
-        lines.append(line_for_telegram)
+        line_tg = f"{link}: {emoji} {label}"
+        lines_tg.append(line_tg)
 
     driver.quit()
 
-    message = "\n".join(lines)
+    # kirim ke telegram
+    message = "\n".join(lines_tg)
     send_telegram(message)
 
 
